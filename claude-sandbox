@@ -129,6 +129,18 @@ __DETECTED_EXEC_PATHS__
   (subpath "/Library/Preferences")        ;; plists
 )
 
+;; ---------- Rosetta 2 (x86_64 translation on Apple Silicon) -------
+(allow file-read* file-map-executable
+  (subpath "/Library/Apple/usr/libexec/oah")
+  (subpath "/usr/libexec/rosetta")
+)
+(allow file-read* file-write*
+  (subpath "/var/db/oah")
+)
+(allow process-exec
+  (subpath "/usr/libexec/rosetta")
+)
+
 ;; ---------- /dev access (RO) + ioctl ------------------------------
 (allow file-read* (literal "/dev"))                           ;;
 (allow file-read* file-write*
@@ -154,10 +166,19 @@ __DETECTED_EXEC_PATHS__
   (global-name "com.apple.SecurityServer")          ;; Keychain (auth token)
   (global-name "com.apple.analyticsd")              ;; security(1) dependency
   (global-name "com.apple.FSEvents")                ;; file watching
+  (global-name "com.apple.oah")                     ;; Rosetta 2 translation
 )
 
 ;; ---------- system-level sockets (AF_SYSTEM) ---------------------
 (allow system-socket)
+
+;; ---------- /Applications (read + exec so `open` can launch) ----
+(allow file-read* file-map-executable
+  (subpath "/Applications")
+)
+(allow process-exec
+  (subpath "/Applications")
+)
 
 ;; ---------- Launch Services needed by /usr/bin/open --------------
 (allow mach-lookup
