@@ -29,24 +29,24 @@ usage() { grep -E '^# ' "${BASH_SOURCE[0]}" | /usr/bin/sed 's/^# \{0,1\}//'; }
 
 detect_package_paths() {
   local paths=()
-  
+
   # Homebrew detection (ARM vs Intel Mac)
   if [[ -d "/opt/homebrew" ]]; then
     paths+=("/opt/homebrew")
   elif [[ -d "/usr/local/Homebrew" ]]; then
     paths+=("/usr/local/Homebrew")
   fi
-  
+
   # User binaries (npm global, pipx, cargo, etc.)
   if [[ -d "$HOME/.local" ]]; then
     paths+=("$HOME/.local")
   fi
-  
+
   # Nix package manager
   if [[ -d "/nix/store" ]]; then
     paths+=("/nix/store")
   fi
-  
+
   printf '%s\n' "${paths[@]}"
 }
 
@@ -54,7 +54,7 @@ generate_profile() {
   local project_dir home_dir
   project_dir="$(pwd -P)"
   home_dir="$HOME"
-  
+
   # Detect available package manager paths
   local detected_paths=()
   readarray -t detected_paths < <(detect_package_paths)
@@ -96,19 +96,31 @@ __DETECTED_USER_PATHS__
   (subpath "/bin")
   (subpath "/sbin")
   (literal "/usr/bin/env")
+  (subpath "__HOME__/.claude")              ;; plugin hooks
 __DETECTED_EXEC_PATHS__
 )
 
 ;; ---------- temp dirs ---------------------------------------------
 (allow file-read* file-write*
   (subpath "/tmp")
-  (regex "^/private/var/folders/.*/T/")
+  (regex "^/private/var/folders/.*/T(/|$)")
 )
 
 ;; ---------- Claude config & token files ---------------------------
 (allow file-read* file-write*
-  (subpath "__HOME__/.claude")            ;; dir
-  (literal "__HOME__/.claude.json")       ;; single file
+  (subpath "__HOME__/.claude")                  ;; dir
+  (regex "^__HOME__/\\.claude\\.json")          ;; .claude.json + .lock + .tmp.*
+  (literal "__HOME__/.claude.lock")
+)
+
+;; ---------- dotfiles & caches Claude / Node needs ----------------
+(allow file-read*
+  (literal "__HOME__/.gitconfig")
+  (literal "__HOME__/.npmrc")
+  (subpath "__HOME__/.npm")
+)
+(allow file-read* file-write*
+  (subpath "__HOME__/Library/Caches/claude-cli-nodejs")
 )
 
 ;; ---------- time-zone & prefs (RO) --------------------------------
@@ -139,7 +151,13 @@ __DETECTED_EXEC_PATHS__
   (global-name "com.apple.lsd.mapdb")
   (global-name "com.apple.lsd.modifydb")
   (global-name "com.apple.coreservices.quarantine-resolver")
+  (global-name "com.apple.SecurityServer")          ;; Keychain (auth token)
+  (global-name "com.apple.analyticsd")              ;; security(1) dependency
+  (global-name "com.apple.FSEvents")                ;; file watching
 )
+
+;; ---------- system-level sockets (AF_SYSTEM) ---------------------
+(allow system-socket)
 
 ;; ---------- Launch Services needed by /usr/bin/open --------------
 (allow mach-lookup
@@ -187,20 +205,20 @@ EOF
     -e "s|__PROJECT_DIR__|$project_dir|g" \
     -e "s|__HOME__|$home_dir|g" \
     "$PROFILE_FILE"
-  
+
   # Then replace detected path placeholders with actual paths
   for path in "${detected_paths[@]}"; do
     # Add to read paths section
     /usr/bin/sed -i '' "/__DETECTED_READ_PATHS__/i\\
   (subpath \"$path\")
 " "$PROFILE_FILE"
-    
+
     # Add to exec paths section
     /usr/bin/sed -i '' "/__DETECTED_EXEC_PATHS__/i\\
   (subpath \"$path\")
 " "$PROFILE_FILE"
-    
-    # Add .local paths to user paths section  
+
+    # Add .local paths to user paths section
     if [[ "$path" == *"/.local" ]]; then
       /usr/bin/sed -i '' "/__DETECTED_USER_PATHS__/i\\
 (allow file-read*\\
@@ -209,14 +227,14 @@ EOF
 " "$PROFILE_FILE"
     fi
   done
-  
+
   # Remove placeholder markers
   /usr/bin/sed -i '' \
     -e "/__DETECTED_READ_PATHS__/d" \
     -e "/__DETECTED_USER_PATHS__/d" \
     -e "/__DETECTED_EXEC_PATHS__/d" \
     "$PROFILE_FILE"
-  
+
   # Add comment if no user paths were added
   if ! grep -q "/.local" "$PROFILE_FILE"; then
     /usr/bin/sed -i '' '/^;; ---------- global npm\/pipx\/cargo bins/a\
@@ -226,7 +244,7 @@ EOF
 }
 
 run_claude() {
-  [ $# -gt 0 ] && shift # drop “run”
+  [ "${1:-}" = "run" ] && shift # drop "run"
   generate_profile
   echo "→ Running Claude Code sandboxed in:  $PWD"
   echo "→ Profile: $PROFILE_FILE"
@@ -240,5 +258,7 @@ case "$cmd" in
   generate)    generate_profile  && echo "$PROFILE_FILE" ;;
   profile)     echo "$PROFILE_FILE" ;;
   help|-h|--help) usage ;;
+  -*)          run_claude        "$@" ;;
   *)           echo "Unknown command: $cmd"; echo; usage; exit 1 ;;
 esac
+
